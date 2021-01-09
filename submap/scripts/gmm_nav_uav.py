@@ -8,6 +8,7 @@ import copy
 import numpy as np
 import scipy.stats as st
 import math
+import threading
 
 from geometry_msgs.msg import Point,Vector3
 from geometry_msgs.msg import PoseWithCovarianceStamped
@@ -15,6 +16,8 @@ from geometry_msgs.msg import PoseStamped, Twist
 from gazebo_msgs.msg import ModelStates
 from nav_msgs.msg import Path
 from submap.msg import gmm, gmmlist
+from mavros_msgs.msg import State
+from mavros_msgs.srv import CommandBool, SetMode
 
 # gmm_cnt=0
 # goal_cnt=0
@@ -38,14 +41,25 @@ def goal_cb(data):
     target=[data.pose.position.x,data.pose.position.y]
     goal_cnt=goal_cnt+1
 
+'''
 def begin_cb(data):
     global begin_pos, begin_quat
-    # pose[1] is the second element, with the name "turtlebot3"
-    begin_pos=[data.pose[1].position.x,data.pose[1].position.y]
-    # print(begin_pos[0], begin_pos[1])
-    begin_quat=[data.pose[1].orientation.x,data.pose[1].orientation.y,data.pose[1].orientation.z,data.pose[1].orientation.w]
+    if 'iris' in data.name:
+        i = data.name.index('iris')
+        pose = data.pose[i]
+        begin_pos=[pose.position.x,pose.position.y]
+        # print(begin_pos[0], begin_pos[1])
+        begin_quat=[pose.orientation.x,pose.orientation.y,pose.orientation.z,pose.orientation.w]
+'''
 
+def mavpose_cb(data):
+    global begin_pos, begin_quat
+    begin_pos=[data.pose.position.x, data.pose.position.y, data.pose.position.z]
+    begin_quat=[data.pose.orientation.x, data.pose.orientation.y, data.pose.orientation.z, data.pose.orientation.w]
 
+def mavros_state_cb(data):
+    global fcu_state
+    fcu_state=data
 
 def prob_visual(gmm_map):
     global resulotion, z_const
@@ -102,8 +116,13 @@ def prob_visual(gmm_map):
 
 def gmm_nav():
     global z_const, gmm_map, resolution, begin_pos, begin_quat, target, move_pub, path_pub, tra_total, ang_total
+    global uav_local_target, height, target_lock
     [pro,Xtop,Xbottom,Ytop,Ybottom]=prob_visual(gmm_map)
     # begin=[int((begin_pos[0]-Xbottom)/resolution),int((begin_pos[1]-Ybottom)/resolution)]
+    print('Xbottom: ', Xbottom)
+    print('Ybottom: ', Ybottom)
+    print('Xtop: ', Xtop)
+    print('Ytop: ', Ytop)
     radius=0.3
     [Fx,Fy]=np.gradient(pro)
     # print("Fx: ", Fx)
@@ -114,7 +133,6 @@ def gmm_nav():
     angle_ulti=math.atan((target[1]-begin_pos[1])/(target[0]-begin_pos[0]))
     # while(true):
     goal=[begin_pos[0]+radius*math.cos(angle_ulti),begin_pos[1]+radius*math.sin(angle_ulti)] # position in the real world
-    print(('goal, ', goal))
     F1_tmp=Fx[int((goal[0]-Xbottom)/resolution),int((goal[1]-Ybottom)/resolution)]
     F2_tmp=Fy[int((goal[0]-Xbottom)/resolution),int((goal[1]-Ybottom)/resolution)]
     angle_x=math.atan((goal[1]-begin_pos[1])/(goal[0]-begin_pos[0]))/math.pi*180
@@ -155,46 +173,22 @@ def gmm_nav():
     print("tra_total= ", tra_total)
     print("ang_total= ", ang_total)
 
-    ##vel pub
-    stop = Twist()
-    move_pub.publish(stop)
     [angleX,angleY,angleZ]=quat_to_euler(begin_quat[0],begin_quat[1],begin_quat[2],begin_quat[3])
-    #rotate
-    while(abs(angleZ-angle_x)>0.02):
-        move=Twist()
-        move.angular.z=np.sign(angle_x-angleZ)*0.1
-        move_pub.publish(move)      
-        rospy.sleep(0.1)       
-        move_pub.publish(stop)
-        rospy.sleep(0.1) 
+
+
+    while (abs(angleZ-angle_x)>2) or (abs(begin_pos[0]-goal[0])>0.1 or abs(begin_pos[1]-goal[1])>0.1):
+        print('diff_yaw, diff_x, diff_y')
+        print((angleZ-angle_x, begin_pos[0]-goal[0], begin_pos[1]-goal[1]))
+        target_lock.acquire()
+        uav_local_target.pose.position.x = goal[0]
+        uav_local_target.pose.position.y = goal[1]
+        uav_local_target.pose.position.z = height
+        uav_local_target.pose.orientation.x = 0.
+        uav_local_target.pose.orientation.y = 0.
+        uav_local_target.pose.orientation.z = math.sin(angle_x*math.pi/180/2)
+        uav_local_target.pose.orientation.w = math.cos(angle_x*math.pi/180/2)
+        target_lock.release()
         [angleX,angleY,angleZ]=quat_to_euler(begin_quat[0],begin_quat[1],begin_quat[2],begin_quat[3])
-        print("angleeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:")
-        print(angleZ)
-        print(angle_x)
-    # print("-------------------------------------2")
-    move_pub.publish(stop)
-    rospy.sleep(0.1) 
-    # print(begin_pos)
-    # print(goal)
-
-    #translate
-    while(abs(begin_pos[0]-goal[0])>0.03 or abs(begin_pos[1]-goal[1])>0.03):
-
-        print("positionnnnnnnnnnnn:")
-        print(begin_pos)
-        print(goal)
-        move=Twist()
-        vel_const=0.1
-        move.linear.x=math.cos(angle_x*math.pi/180)*vel_const*np.sign(goal[0]-begin_pos[0])
-        move.linear.y=math.sin(angle_x*math.pi/180)*vel_const*np.sign(goal[1]-begin_pos[1])
-        move_pub.publish(move)
-        rospy.sleep(0.1)       
-        move_pub.publish(stop)
-        
-    # print("-------------------------------------3")
-    move_pub.publish(stop)
-    #angle jiaosudu 
-    #linar xiansudu 
 
 def quat_to_euler(x,y,z,w):
     r = math.atan2(2*(w*x+y*z),1-2*(x*x+y*y))
@@ -206,6 +200,35 @@ def quat_to_euler(x,y,z,w):
     angleY = y*180/math.pi #Z
     return angleP,angleR,angleY
 
+# periodically check FCU's state and takeoff
+def takeoff_loop(event):
+    global is_takeoff, fcu_state, last_request
+    global arming_client, land_client, set_mode_client
+    if not is_takeoff:
+        if (fcu_state.mode != 'OFFBOARD' and fcu_state.mode != 'AUTO.LOITER') and (rospy.Time.now() - last_request > rospy.Duration(6.0)):
+            response = set_mode_client(0, 'OFFBOARD')  #请求解锁
+            if response.mode_sent:
+                rospy.loginfo('Offboard enabled')
+            last_request = rospy.Time.now()
+        else:
+            if (not fcu_state.armed) and rospy.Time.now() - last_request > rospy.Duration(6.0):
+                response = arming_client(True)  #请求起飞
+                if response.success:
+                    is_takeoff = True
+                    rospy.loginfo('Vehicle armed')
+                else:
+                    rospy.loginfo('Vehicle armed unsuccessfully')
+                last_request = rospy.Time.now()
+                print('1222222222222222222222')
+        print((fcu_state.mode, fcu_state.armed))
+    pass
+
+def uav_local_target_loop(event):
+    global uav_target_pose_local_pub, uav_local_target, target_lock
+    target_lock.acquire()
+    uav_target_pose_local_pub.publish(uav_local_target)
+    target_lock.release()
+
 def main():
     global gmm_cnt
     global goal_cnt
@@ -213,24 +236,67 @@ def main():
     global target
     global begin_pos, begin_quat
     global resolution, z_const
-    global move_pub, goal_pub
+    global arming_client, land_client, set_mode_client
+    global move_pub, goal_pub, uav_target_pose_local_pub
     global tra_total, ang_total
+    global is_takeoff
+    global fcu_state
+    global last_request
+    global uav_local_target
+    global height
+    global target_lock
+
+    rospy.init_node('gmm_nav', anonymous=True)
+
     tra_total=0
     ang_total=0
     resolution=0.05
     z_const=0.5
     gmm_cnt=0
     goal_cnt=0
-    rospy.init_node('gmm_nav', anonymous=True)
-    rate = rospy.Rate(5)
+    begin_pos=[0.0, 0.0, 0.0]
+    begin_quat=[0.0, 0.0, 0.0, 1.0]
+    height=0.25
+    is_takeoff=False
+    fcu_state=State()
+    last_request=rospy.Time.now()
+    target_lock=threading.Lock()
+
+    arming_client = rospy.ServiceProxy('/mavros/cmd/arming', CommandBool)
+    land_client = rospy.ServiceProxy('/mavros/cmd/land', CommandBool)
+    set_mode_client = rospy.ServiceProxy('/mavros/set_mode', SetMode)
+
     move_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
     goal_pub = rospy.Publisher('/goal_path', Path, queue_size=1)
+    uav_target_pose_local_pub = rospy.Publisher('/mavros/setpoint_position/local', PoseStamped, queue_size=100)
+
     target_sub = rospy.Subscriber('/move_base_simple/goal',PoseStamped, goal_cb,queue_size=100)
+    #target_sub = rospy.Subscriber('/move_base_simple/goal_modified',PoseStamped, goal_cb,queue_size=100)
     gmm_sub = rospy.Subscriber('gmm_after_trans',gmm, subgmm_cb,queue_size=100)
-    begin_pose_sub = rospy.Subscriber('/gazebo/model_states',ModelStates, begin_cb,queue_size=100)
-    
+    #begin_pose_sub = rospy.Subscriber('/gazebo/model_states',ModelStates, begin_cb,queue_size=100)
+    mavpose_sub = rospy.Subscriber('/mavros/local_position/pose',PoseStamped, mavpose_cb,queue_size=100)
+    mavros_state_sub = rospy.Subscriber('/mavros/state',State, mavros_state_cb,queue_size=100)
+
+    rate = rospy.Rate(5)
+    uav_local_target = PoseStamped()
+    uav_local_target.header.seq = 1
+    uav_local_target.header.frame_id = 'map'
+    uav_local_target.pose.position.z = height
+    uav_local_target.pose.orientation.w = 1
+    '''
+    for i in range(10):
+        uav_target_pose_local_pub.publish(uav_local_target)
+        rate.sleep()
+    '''
+
+    takeoff_timer = rospy.Timer(rospy.Duration(0.25), takeoff_loop)
+    uav_local_target_timer = rospy.Timer(rospy.Duration(0.05), uav_local_target_loop)
 
     while ( 1 ):
+        if not is_takeoff:
+            print('not ready 2 takeoff')
+            rospy.sleep(0.5)
+            continue
         print("goal_cnt")
         print(goal_cnt)
         # print("gmm_cnt")
