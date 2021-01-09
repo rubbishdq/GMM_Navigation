@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
 
+from collections import deque
 import signal
 import sys
 import rospy
@@ -37,8 +38,11 @@ def subgmm_cb(data):
 
     # target is the ultimate navigation point, goal is the next navigation step    
 def goal_cb(data):
-    global goal_cnt, target
-    target=[data.pose.position.x,data.pose.position.y]
+    global goal_cnt, target, target_deque
+    if goal_cnt == 0:
+        target=[data.pose.position.x,data.pose.position.y]
+    else:
+        target_deque.append([data.pose.position.x,data.pose.position.y])
     goal_cnt=goal_cnt+1
 
 '''
@@ -117,6 +121,7 @@ def prob_visual(gmm_map):
 def gmm_nav():
     global z_const, gmm_map, resolution, begin_pos, begin_quat, target, move_pub, path_pub, tra_total, ang_total
     global uav_local_target, height, target_lock
+    global goal_cnt, target_deque
     [pro,Xtop,Xbottom,Ytop,Ybottom]=prob_visual(gmm_map)
     # begin=[int((begin_pos[0]-Xbottom)/resolution),int((begin_pos[1]-Ybottom)/resolution)]
     print('Xbottom: ', Xbottom)
@@ -132,7 +137,8 @@ def gmm_nav():
     # F_prev=np.sqrt(pow(F1_tmp,2)+pow(F2_tmp,2))
     angle_ulti=math.atan((target[1]-begin_pos[1])/(target[0]-begin_pos[0]))
     # while(true):
-    goal=[begin_pos[0]+radius*math.cos(angle_ulti),begin_pos[1]+radius*math.sin(angle_ulti)] # position in the real world
+    dist = np.sqrt(pow(target[0]-begin_pos[0],2)+pow(target[1]-begin_pos[1],2))
+    goal=[begin_pos[0]+min(dist, radius)*math.cos(angle_ulti),begin_pos[1]+min(dist, radius)*math.sin(angle_ulti)] # position in the real world
     F1_tmp=Fx[int((goal[0]-Xbottom)/resolution),int((goal[1]-Ybottom)/resolution)]
     F2_tmp=Fy[int((goal[0]-Xbottom)/resolution),int((goal[1]-Ybottom)/resolution)]
     angle_x=math.atan((goal[1]-begin_pos[1])/(goal[0]-begin_pos[0]))/math.pi*180
@@ -188,7 +194,13 @@ def gmm_nav():
         uav_local_target.pose.orientation.z = math.sin(angle_x*math.pi/180/2)
         uav_local_target.pose.orientation.w = math.cos(angle_x*math.pi/180/2)
         target_lock.release()
+        rospy.sleep(rospy.Duration(0.1))
         [angleX,angleY,angleZ]=quat_to_euler(begin_quat[0],begin_quat[1],begin_quat[2],begin_quat[3])
+
+    if (abs(begin_pos[0]-target[0])<0.1 and abs(begin_pos[1]-target[1])<0.1):
+        goal_cnt -= 1
+        if goal_cnt > 0:
+            target = target_deque.popleft()
 
 def quat_to_euler(x,y,z,w):
     r = math.atan2(2*(w*x+y*z),1-2*(x*x+y*y))
@@ -245,6 +257,7 @@ def main():
     global uav_local_target
     global height
     global target_lock
+    global target_deque
 
     rospy.init_node('gmm_nav', anonymous=True)
 
@@ -261,6 +274,7 @@ def main():
     fcu_state=State()
     last_request=rospy.Time.now()
     target_lock=threading.Lock()
+    target_deque=deque()
 
     arming_client = rospy.ServiceProxy('/mavros/cmd/arming', CommandBool)
     land_client = rospy.ServiceProxy('/mavros/cmd/land', CommandBool)
