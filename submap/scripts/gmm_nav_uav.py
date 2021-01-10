@@ -124,67 +124,79 @@ def gmm_nav():
     global goal_cnt, target_deque
     [pro,Xtop,Xbottom,Ytop,Ybottom]=prob_visual(gmm_map)
     # begin=[int((begin_pos[0]-Xbottom)/resolution),int((begin_pos[1]-Ybottom)/resolution)]
-    print('Xbottom: ', Xbottom)
-    print('Ybottom: ', Ybottom)
-    print('Xtop: ', Xtop)
-    print('Ytop: ', Ytop)
-    radius=0.3
+    #print('Xbottom: ', Xbottom)
+    #print('Ybottom: ', Ybottom)
+    #print('Xtop: ', Xtop)
+    #print('Ytop: ', Ytop)
+    radius=0.2
     [Fx,Fy]=np.gradient(pro)
     # print("Fx: ", Fx)
     # print("Fy: ", Fy)
     # F1_tmp=Fx[int((begin_pos[0]-Xbottom)/resolution),int((begin_pos[1]-Ybottom)/resolution)]
     # F2_tmp=Fy[int((begin_pos[0]-Xbottom)/resolution),int((begin_pos[1]-Ybottom)/resolution)]
     # F_prev=np.sqrt(pow(F1_tmp,2)+pow(F2_tmp,2))
-    angle_ulti=math.atan((target[1]-begin_pos[1])/(target[0]-begin_pos[0]))
+    angle_ulti=math.atan2((target[1]-begin_pos[1]),(target[0]-begin_pos[0]))
     # while(true):
     dist = np.sqrt(pow(target[0]-begin_pos[0],2)+pow(target[1]-begin_pos[1],2))
     goal=[begin_pos[0]+min(dist, radius)*math.cos(angle_ulti),begin_pos[1]+min(dist, radius)*math.sin(angle_ulti)] # position in the real world
     F1_tmp=Fx[int((goal[0]-Xbottom)/resolution),int((goal[1]-Ybottom)/resolution)]
     F2_tmp=Fy[int((goal[0]-Xbottom)/resolution),int((goal[1]-Ybottom)/resolution)]
-    angle_x=math.atan((goal[1]-begin_pos[1])/(goal[0]-begin_pos[0]))/math.pi*180
+    angle_x=math.atan2((goal[1]-begin_pos[1]),(goal[0]-begin_pos[0]))/math.pi*180
 
     F_now=np.sqrt(pow(F1_tmp,2)+pow(F2_tmp,2))
     print("F_now: ", F_now)
-    if (F_now>(1e-25)):
-        for p in range(1,4):
+    threshold = 1e-25
+    flag = False
+    if (F_now>threshold):
+        for p in range(1,7):
             angle1=angle_x+p*30
             angle1=angle1*math.pi/180
             goal1_tmp=[begin_pos[0]+radius*math.cos(angle1),begin_pos[1]+radius*math.sin(angle1)]
             F1_tmp=Fx[int((goal1_tmp[0]-Xbottom)/resolution),int((goal1_tmp[1]-Ybottom)/resolution)]
             F2_tmp=Fy[int((goal1_tmp[0]-Xbottom)/resolution),int((goal1_tmp[1]-Ybottom)/resolution)]
             F1_now=np.sqrt(pow(F1_tmp,2)+pow(F2_tmp,2))
+            print('F1_now from round %d: ' % (p), F1_now)
             angle2=angle_x-p*30
             angle2=angle2*math.pi/180
             goal2_tmp=[begin_pos[0]+radius*math.cos(angle2),begin_pos[1]+radius*math.sin(angle2)]
             F1_tmp=Fx[int((goal2_tmp[0]-Xbottom)/resolution),int((goal2_tmp[1]-Ybottom)/resolution)]
             F2_tmp=Fy[int((goal2_tmp[0]-Xbottom)/resolution),int((goal2_tmp[1]-Ybottom)/resolution)]
             F2_now=np.sqrt(pow(F1_tmp,2)+pow(F2_tmp,2))
+            print('F2_now from round %d: ' % (p), F2_now)
             if (min(F1_now,F2_now)<F_now):
                 if (F1_now<F2_now):
                     goal=goal1_tmp
-                    angle_x=math.atan((goal[1]-begin_pos[1])/(goal[0]-begin_pos[0]))/math.pi*180
+                    angle_x=math.atan2((goal[1]-begin_pos[1]),(goal[0]-begin_pos[0]))/math.pi*180
                     # angle_x=math.atan((target[1]-goal[1])/(target[0]-goal[0]))
                     # print("-------------------------------------1", angle1)
+                    print('choosing F1_tmp from round %d' % (p))
                 else :
                     goal=goal2_tmp
-                    angle_x=math.atan((goal[1]-begin_pos[1])/(goal[0]-begin_pos[0]))/math.pi*180
+                    angle_x=math.atan2((goal[1]-begin_pos[1]),(goal[0]-begin_pos[0]))/math.pi*180
                     # print("-------------------------------------2", angle2,angle_x)
                     # angle_x=math.atan((target[1]-goal[1])/(target[0]-goal[0]))
+                    print('choosing F2_tmp from round %d' % (p))
+                flag = True
                 break
         print("0000000000000000000")    
+    else:
+        flag = True
+    if not flag: # going backward
+        goal = [begin_pos[0]+min(dist, radius)*math.cos(angle_ulti),begin_pos[1]+min(dist, radius)*math.sin(angle_ulti)]
+        angle_x = (angle_x+180) if (angle_x<0) else (angle_x-180)
         
     tra_total=tra_total+radius
     [angleX,angleY,angleZ]=quat_to_euler(begin_quat[0],begin_quat[1],begin_quat[2],begin_quat[3])
-    ang_total=ang_total+ abs(angle_x-angleZ)       
+    ang_total=ang_total+ ang_diff(angle_x, angleZ)       
     print("tra_total= ", tra_total)
     print("ang_total= ", ang_total)
 
     [angleX,angleY,angleZ]=quat_to_euler(begin_quat[0],begin_quat[1],begin_quat[2],begin_quat[3])
 
 
-    while (abs(angleZ-angle_x)>2) or (abs(begin_pos[0]-goal[0])>0.1 or abs(begin_pos[1]-goal[1])>0.1):
-        print('diff_yaw, diff_x, diff_y')
-        print((angleZ-angle_x, begin_pos[0]-goal[0], begin_pos[1]-goal[1]))
+    while (ang_diff(angleZ, angle_x)>2) or (abs(begin_pos[0]-goal[0])>0.09 or abs(begin_pos[1]-goal[1])>0.09):
+        #print('diff_yaw, diff_x, diff_y')
+        #print((angleZ-angle_x, begin_pos[0]-goal[0], begin_pos[1]-goal[1]))
         target_lock.acquire()
         uav_local_target.pose.position.x = goal[0]
         uav_local_target.pose.position.y = goal[1]
@@ -211,6 +223,15 @@ def quat_to_euler(x,y,z,w):
     angleP = p*180/math.pi #X
     angleY = y*180/math.pi #Z
     return angleP,angleR,angleY
+
+# -pi < ang1, ang2 < pi
+def ang_diff(ang1, ang2, is_deg=True):
+    if ang1 > ang2:
+        ang1, ang2 = ang2, ang1
+    if is_deg:
+        return min(ang2-ang1, ang1+360-ang2)
+    else:
+        return min(ang2-ang1, ang1+2*math.pi-ang2)
 
 # periodically check FCU's state and takeoff
 def takeoff_loop(event):
